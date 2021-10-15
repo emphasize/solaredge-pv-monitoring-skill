@@ -33,7 +33,7 @@ class SolaredgePvMonitoring(MycroftSkill):
         self.db_lang = self.settings.get("db_lang", None)
         self.db_name = self.settings.get("db_name", None)
         # automated check interval
-        self.check_intervall = 9000  # seconds
+        self.check_intervall = 900  # seconds
         if self.use_storage:
             if not self.db_lang or not self.db_name:
                 self.speak_dialog('database_credentials_missing')
@@ -44,7 +44,7 @@ class SolaredgePvMonitoring(MycroftSkill):
                                               self.check_intervall,
                                               name="SolarStorage")
                 self.recent_checktime = datetime.now()
-                LOG.info("Next solar data check: {}".format((datetime.now(
+                LOG.info("Next solar data check: {}".format((now_local(
                 )+timedelta(seconds=self.check_intervall)).strftime("%Y-%m-%d %H:%M:%S")))
 
         # SE Aggregation granularity
@@ -95,7 +95,7 @@ class SolaredgePvMonitoring(MycroftSkill):
                                               self.check_intervall,
                                               name="SolarStorage")
                 self.recent_checktime = datetime.now()
-                LOG.info("Next solar data check: {}".format((datetime.now(
+                LOG.info("Next solar data check: {}".format((now_local(
                 )+timedelta(seconds=self.check_intervall)).strftime("%Y-%m-%d %H:%M:%S")))
 
     def db_init(self):
