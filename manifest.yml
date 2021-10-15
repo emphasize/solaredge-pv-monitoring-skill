@@ -1,5 +1,8 @@
 dependencies:
+  system:
+    - python-mysqlclient
   python:
     - sqlalchemy
     - sqlalchemy_utils
+    - mysqlclient
     - pandas

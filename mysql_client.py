@@ -1,4 +1,3 @@
-import mysql.connector
 from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Float, DateTime, text
 from sqlalchemy_utils import database_exists, create_database
 from sqlalchemy.exc import SQLAlchemyError
@@ -39,7 +38,7 @@ class mysql_client(object):
         # MAX_CONNECTIONS_PER_HOUR 0 MAX_UPDATES_PER_HOUR 0 MAX_USER_CONNECTIONS 0;
 
     def create_connection(self, database, use_ssl):
-        dialect = {"mysql": "mysql+mysqlconnector"}
+        dialect = {"mysql": "mysql+mysqldb"}
         # todo derivative_table => summary tables
         DB_TABLES = list(SQL_DB_SCHEMAS.keys())
         DB_TABLES.extend(SQL_DERIVATIVE_TABLES)
@@ -57,7 +56,7 @@ class mysql_client(object):
         else:
             connect_args = {}
 
-        self.db = create_engine(url, connect_args)
+        self.db = create_engine(url, connect_args=connect_args)
 
         try:
             if not database_exists(url):
