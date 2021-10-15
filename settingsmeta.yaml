@@ -1,22 +1,47 @@
 
 skillMetadata:
   sections:
-    - name: Options << Name of section
-      fields:
-        - name: internal_python_variable_name
-          type: text
-          label: Setting Friendly Display Name
-          value: ""
-          placeholder: demo prompt in the input box
-    - name: Login << Name of another section
+    - name: Credentials
       fields:
         - type: label
-          label: Just a little bit of extra info for the user to understand following settings
-        - name: username
-          type: text
-          label: Username
+          label: The SiteID your account is assigned to (-> dashboard)
+        - name: siteID
+          type: number
+          label: Site ID
           value: ""
-        - name: password
+          placeholder: 12345
+        - type: label
+          label: API Key set up in your account admin section
+        - name: apiKey
           type: password
-          label: Password
+          label: API Key
+          value: ""
+    - name: Data Storage (optional)
+      fields:
+        - name: location_label
+          type: label
+          label: >
+            <p>
+            If an additional storage is used and the service requires sensitive information
+            like IP, usernames or passwords this is stored locally in config.py <br> <br>
+            Just open the file /opt/mycroft/<skill-name>/config.py and fill in your credentials
+            </p>
+        - name: use_storage
+          type: checkbox
+          label: Use data storage
+          value: "False"
+        - name: db_lang
+          type: select
+          label: Database language
+          options: "MySQL|mysql"
+          value: "mysql"
+        - name: use_ssl
+          type: checkbox
+          label: Use SSL
+          value: "False"
+        - type: label
+          label: database name
+        - name: db_name
+          type: password
+          label: The name of the database (Created if non existent; be sure to spell correctly)
           value: ""
