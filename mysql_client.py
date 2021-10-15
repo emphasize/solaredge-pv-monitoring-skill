@@ -90,20 +90,16 @@ class mysql_client(object):
             kwargs = {key: value for key, value in kwargs.items()
                       if value is not None}
         kwargs['api_key'] = apiKey
-        print(kwargs)
 
-        # response = requests.get(url, params=kwargs)
-        with open("/home/sweng/.mycroft/skills/SolaredgePvMonitoring/pv.json", "r") as dump:
-            json_data = json.load(dump)
+        response = requests.get(url, params=kwargs)
+        json_data = response.json()
 
-        # print(json.dumps(response.json(), indent=4))
-
-        # if response.status_code != 200:
-        #    return response.status_code
-        if not format:
-            return json_data  # response.json()
+        if response.status_code != 200:
+            return response.status_code
+        elif not format:
+            return json_data
         else:
-            return self.__format(json_data, api, slice)  # response.json()
+            return self.__format(json_data, api, slice)
 
     def to_sql(self, data, api, checkTime=False, summary=False):
 
