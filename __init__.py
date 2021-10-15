@@ -43,7 +43,7 @@ class SolaredgePvMonitoring(MycroftSkill):
                                               None,
                                               self.check_intervall,
                                               name="SolarStorage")
-                self.recent_checktime = datetime.now()
+                self.recent_checktime = now_local()
                 LOG.info("Next solar data check: {}".format((now_local(
                 )+timedelta(seconds=self.check_intervall)).strftime("%Y-%m-%d %H:%M:%S")))
 
@@ -94,7 +94,7 @@ class SolaredgePvMonitoring(MycroftSkill):
                                               None,
                                               self.check_intervall,
                                               name="SolarStorage")
-                self.recent_checktime = datetime.now()
+                self.recent_checktime = now_local()
                 LOG.info("Next solar data check: {}".format((now_local(
                 )+timedelta(seconds=self.check_intervall)).strftime("%Y-%m-%d %H:%M:%S")))
 
@@ -123,7 +123,7 @@ class SolaredgePvMonitoring(MycroftSkill):
         params = {"slice": "day",
                   "timeUnit": "QUARTER_OF_AN_HOUR",
                   "startTime": self.recent_checktime.strftime("%Y-%m-%d %H:%M:%S"),
-                  "endTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                  "endTime": now_local().strftime("%Y-%m-%d %H:%M:%S")}
 
         for api in apis_check:
             data = \
@@ -132,9 +132,9 @@ class SolaredgePvMonitoring(MycroftSkill):
 
             self.mysql_client.to_sql(data, api, checkTime=True)
 
-        self.recent_checktime = datetime.now()
+        self.recent_checktime = now_local()
         LOG.info("Data dumped")
-        LOG.info("Next solar data check: {}".format((datetime.now(
+        LOG.info("Next solar data check: {}".format((now_local(
         )+timedelta(seconds=self.check_intervall)).strftime("%Y-%m-%d %H:%M:%S")))
 
     @intent_handler(IntentBuilder("power_currently").require("currently").one_of("consumption", "production", "from_grid").optionally("subject").build())
@@ -188,7 +188,7 @@ class SolaredgePvMonitoring(MycroftSkill):
                 break
 
         utterance = message.data.get('utterance')
-        now = datetime.now()
+        now = now_local()
 
         # get granularity (defaults to DAY -on SE end- if none is given)
         granularity = self.SE_timeUnits.get(
