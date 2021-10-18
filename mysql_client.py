@@ -1,14 +1,13 @@
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Float, DateTime, text
+from sqlalchemy import create_engine, MetaData, Column, Integer, text
 from sqlalchemy_utils import database_exists, create_database
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.declarative import declarative_base
 from copy import deepcopy
-import json
 import requests
-import urllib.parse
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from calendar import monthrange
+from time import sleep
 
 from .config import \
     SQL_CREDENTIALS, \
@@ -16,32 +15,33 @@ from .config import \
     SQL_DB_SCHEMAS, \
     SQL_SPLIT_TABLE_TIME, \
     SQL_DERIVATIVE_TABLES, \
-    SE_CREDENTIALS
+    SE_CREDENTIALS, \
+    SE_API_TABLE, \
+    SQL_TABLES_PREFIX
 
 Base = declarative_base()
 
 
 class mysql_client(object):
-    #language->db_type
+    # todo language->db_type
     def __init__(self, language):
         self.language = language
         self.database = ""
         self.db = None
-        # create Table Objects (SQLAlchemy)
-        # self.tables = { name: Table(name, MetaData(), *schema) for name, schema in SQL_DB_SCHEMAS.items() }
-        # API-basetable-identifier
-        self.api_tables = {"powerDetails": "power",
-                           "energyDetails": "energy"}
+        self.tz = timezone.utc
 
-        # reuires CREATE USER 'root'@'192.168.188.%' IDENTIFIED VIA mysql_native_password USING '***';
-        # GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.188.%' REQUIRE NONE WITH GRANT OPTION MAX_QUERIES_PER_HOUR 0
-        # MAX_CONNECTIONS_PER_HOUR 0 MAX_UPDATES_PER_HOUR 0 MAX_USER_CONNECTIONS 0;
+    # reuires CREATE USER 'user'@'x.x.x.%' IDENTIFIED VIA mysql_native_password USING '***';
+    # GRANT ALL PRIVILEGES ON *.* TO 'user'@'x.x.x.%' REQUIRE NONE WITH GRANT OPTION MAX_QUERIES_PER_HOUR 0
+    # MAX_CONNECTIONS_PER_HOUR 0 MAX_UPDATES_PER_HOUR 0 MAX_USER_CONNECTIONS 0;
 
     def create_connection(self, database, use_ssl):
         dialect = {"mysql": "mysql+mysqldb"}
         # todo derivative_table => summary tables
-        DB_TABLES = list(SQL_DB_SCHEMAS.keys())
-        DB_TABLES.extend(SQL_DERIVATIVE_TABLES)
+        tables = list(SQL_DB_SCHEMAS.keys())
+        DB_TABLES = dict.fromkeys(tables, [datetime.now(tz=self.tz)])
+        for table, references in SQL_DERIVATIVE_TABLES.items():
+            DB_TABLES[table].extend(references)
+
         self.database = database
 
         url = "{0}://{1}:{2}@{3}/{4}".format(dialect[self.language],
@@ -62,12 +62,12 @@ class mysql_client(object):
             if not database_exists(url):
                 create_database(url)
             # prime tables
-            tables_present = self.db.table_names()
-            tables_missing = [item for item
-                              in self.__map_table_name(DB_TABLES, datetime.now())
-                              if item not in tables_present]
+            tables_present = set(self.db.table_names())
+            tables = set([self.__map_table_name(table, reference)
+                          for table, references in DB_TABLES.items()
+                          for reference in references])
+            tables_missing = tables.difference(tables_present)
             if tables_missing:
-                print(tables_missing)
                 self.__create_table(tables_missing)
 
         except SQLAlchemyError as e:
@@ -75,6 +75,9 @@ class mysql_client(object):
             return error
 
         return 0
+
+    def set_timezone(self, timezone):
+        self.tz = timezone
 
     def get_api_response(self, api, slice=False, format=True, **kwargs):
 
@@ -101,22 +104,21 @@ class mysql_client(object):
         else:
             return self.__format(json_data, api, slice)
 
-    def to_sql(self, data, api, checkTime=False, summary=False):
+    def to_sql(self, data, api, checkTime=False, summary=''):
 
-        basetable = self.api_tables[api]
+        basetable = SE_API_TABLE[api]
         meta = MetaData()
         meta.reflect(bind=self.db)
 
-        if summary:
-            basetable = "{}_{}".format(basetable, summary)
-
         for slice in data:
-            if isinstance(slice[0][0], datetime):
-                time = slice[0][0]
+            if isinstance(slice[0][0], datetime) and not summary:
+                reftime = slice[0][0]
+            elif summary:
+                reftime = summary
             else:
-                time = None
+                reftime = None
 
-            table = self.__map_table_name(basetable, time)
+            table = self.__map_table_name(basetable, reftime)
             if table not in self.db.table_names():
                 self.__create_table(table)
 
@@ -124,18 +126,17 @@ class mysql_client(object):
                        if col.name != "id"]
             self.__sql_dump_data(slice, table, columns)
 
-            if checkTime and time.strftime("%H:%M:%S") == "00:00:00":
+            if checkTime and isinstance(reftime, datetime) \
+                    and reftime.strftime("%H:%M:%S") == "00:00:00":
                 # check date shift
-                for summary in self.__check_date_shift(time):
-                    table = "{}_{}".format(basetable, summary)
-                    slice = self.from_sql(basetable, time, summary)
+                for timespan in self.__check_date_shift(reftime):
+                    table = self.__map_table_name(basetable, timespan)
+                    slice = self.from_sql(basetable, reftime, timespan)
                     self.__sql_dump_data(slice, table, columns)
 
-    # unklare situation mit time
-    # def from_sql(self, basetable, timespan):
     def from_sql(self, basetable, time, timespan):
 
-        time = datetime.now().replace(microsecond=0)
+        # time = datetime.now().replace(microsecond=0) if not time else time
         table = self.__map_table_name(basetable, time)
         meta = MetaData()
         meta.reflect(bind=self.db)
@@ -147,8 +148,6 @@ class mysql_client(object):
             # i do se a need for different math methods in the future
             startTime, endTime = self._get_timespan(time, timespan)
             for column in columns:
-                print("SELECT SUM("+column+") FROM " + table
-                      + " WHERE Time BETWEEN :startTime AND :endTime")
                 str = text("SELECT SUM("+column+") FROM " + table
                            + " WHERE Time BETWEEN :startTime AND :endTime")
                 # SQLAlchemy cant insert column/table as argumemt -> ProgrammingError
@@ -162,36 +161,54 @@ class mysql_client(object):
                 # future (>2.0) implementation result.scalars[column].all()
                 data.append(result[0])
             data.insert(0, endTime)
-            print(data)
 
         return [data]
 
     def retrieve_historical_data(self):
         # get start of solar production
-        jsonData = self.get_api_response("dataPeriod")
-        startTime = jsonData["dataPriod"]["startDate"]
-        endTime = datetime.now()
+        timespan = self.get_api_response("dataPeriod")
+        startTime = "{} {}".format(timespan[0], "00:00:00")
+        endTime = datetime.now(tz=self.tz)
 
         # monthly, weekly, yearly data
+        api = "energyDetails"
         check = ["WEEK", "MONTH", "YEAR"]
         for timeframe in check:
-            data = self.get_api_response("energyDetails",
+            data = self.get_api_response(api,
                                          timeUnit=timeframe,
                                          startTime=startTime,
-                                         endTime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            self.to_sql(data, "energyDetails", summary=timeframe.lower())
+                                         endTime=datetime.now(tz=self.tz)
+                                         .strftime("%Y-%m-%d %H:%M:%S"))
+            self.to_sql(data, api, summary=timeframe.lower())
 
-        # quarterhour data is only present the last 365 days
+        # daily data is only present the last 365 days
         startTime = (endTime - timedelta(days=364)
                      ).strftime("%Y-%m-%d %H:%M:%S")
-        timespan = SQL_SPLIT_TABLE_TIME.get("energy", False)
-        data = self.get_api_response("energyDetails", slice=timespan,
+        check = ["DAY"]
+        for timeframe in check:
+            data = self.get_api_response(api,
+                                         timeUnit=timeframe,
+                                         startTime=startTime,
+                                         endTime=datetime.now(tz=self.tz)
+                                         .strftime("%Y-%m-%d %H:%M:%S"))
+            self.to_sql(data, api, summary=timeframe.lower())
+
+        # quarterhour data is only present the last month
+        startTime = (endTime - timedelta(days=30)
+                     ).strftime("%Y-%m-%d %H:%M:%S")
+        table = SE_API_TABLE[api]
+        timespan = SQL_SPLIT_TABLE_TIME.get(table, False)
+        data = self.get_api_response(api, slice=timespan,
                                      timeUnit="QUARTER_OF_AN_HOUR",
                                      startTime=startTime,
-                                     endTime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        self.to_sql(data, "energyDetails")
+                                     endTime=datetime.now(tz=self.tz)
+                                     .strftime("%Y-%m-%d %H:%M:%S"))
+        self.to_sql(data, api)
 
         # inventory information
+        # TODO
+
+        return True
 
     def _get_timespan(self, time, timespan):
 
@@ -211,8 +228,6 @@ class mysql_client(object):
         elif timespan == "year":
             timespan = timedelta(days=365+leap(time))
 
-        print((time - timespan).replace(hour=0, minute=0, second=0))
-        print((time - timespan).replace(hour=0).replace(minute=0).replace(second=0))
         startTime = (time - timespan).replace(hour=0, minute=0, second=0)
 
         return startTime, endTime
@@ -223,93 +238,54 @@ class mysql_client(object):
             for row in slice:
                 for idx, item in enumerate(row):
                     if isinstance(item, datetime):
-                        time = item.strftime("%Y-%m-%d %H:%M:%S")
                         row[idx] = "'"+item.strftime("%Y-%m-%d %H:%M:%S")+"'"
                     else:
                         row[idx] = str(item)
 
-                print("INSERT INTO "+table
-                      + " ("+','.join(columns)+") VALUES ("+','.join(row)+")")
                 sql = text("INSERT INTO "+table
                            + " ("+','.join(columns)+") VALUES ("+','.join(row)+")")
                 connection.execute(sql)
+                sleep(0.2)
 
-    #def __sql_dump_summary_data(self, basetable, time):
-        ##todo column whitelist
-        ##expand if one should be able to search in different tables
-        #columns = [ col.name for col in self.tables[basetable].c if col.name != "id" and col.name != "Time" ]
-        #checkTime = [("day", True),
-                #("week", time.weekday()==0),
-                #("month", time.day==1),
-                #("year", time.day==1 and time.month==1)]
-#
-        #check = { timespan: self._get_timespan(time, timespan) for timespan, needed in checkTime if needed }
-        #with self.db.connect() as connection:
-            #for table, dt_list in check.items():
-                #data = []
-                #table_name = self.__map_table_name(basetable, time)
-                ##i do se a need for different math methods in the future
-                #for column in columns:
-                #str = text("SELECT SUM("+column+") FROM "+table_name+
-                #" WHERE Time BETWEEN :startTime AND :endTime" )
-                ##SQLAlchemy cant insert column/table as argumemt -> ProgrammingError
-                #result = connection.execute(str,
-                #startTime = dt_list[0],
-                #endTime = dt_list[1]
-                #).fetchone()
-                ##future (>2.0) implementation result.scalars[column].all()
-                #data.append(result[0])
-                #data.insert(0, dt_list[1])
-                ##SQL insert
-                #connetion.execute(text("INSERT INTO "+basename+"_"+table+" (Time,"+columns.join(',')+") VALUES ("+data.join(',')+")"))
-                ##additional table manipulation
-
-    def __map_table_name(self, tablenames, time):
+    def __map_table_name(self, table, reference):
         ''' Helper method to construct the table names.
             If configured a new table gets created in
 
             Input: str or list of str
             Output: str or list of str
         '''
-        table_list = []
-        if isinstance(tablenames, str):
-            single = True
-            tablenames = [tablenames]
-        else:
-            single = False
+        # apply prefix
+        prefix = SQL_TABLES_PREFIX.get(table.rsplit('_', 1)[0], None)
+        if prefix:
+            table = "{}_{}".format(prefix, table)
 
-        for basename in tablenames:
-            for table, timer in SQL_SPLIT_TABLE_TIME:
-                if basename == table:
+        if isinstance(reference, str):
+            table = "{}_{}".format(table, reference)
+        else:
+            for splittable, timer in SQL_SPLIT_TABLE_TIME.items():
+                if splittable == table:
                     if timer == "DAY":
-                        table_list.append("{}_{}_{}_{}".format(basename,
-                                                               time.day,
-                                                               time.month,
-                                                               time.year))
+                        table = "{}_{}_{}_{}".format(table,
+                                                     reference.day,
+                                                     reference.month,
+                                                     reference.year)
                         break
                     elif timer == "WEEK":
-                        table_list.append("{}_{}_{}".format(basename,
-                                                            time.isocalendar()[
-                                                                             1],
-                                                            time.year))
+                        table = "{}_{}_{}".format(table,
+                                                  reference.isocalendar()[1],
+                                                  reference.year)
                         break
                     elif timer == "MONTH":
-                        table_list.append("{}_{}_{}".format(basename,
-                                                            time.month,
-                                                            time.year))
+                        table = "{}_{}_{}".format(table,
+                                                  reference.month,
+                                                  reference.year)
                         break
                     elif timer == "YEAR":
-                        table_list.append("{}_{}".format(basename,
-                                                         time.year))
+                        table = "{}_{}".format(table,
+                                               reference.year)
                         break
-            else:
-                table_list.append(basename)
-                # tablename=basename
 
-        if single:
-            return table_list[0]
-        else:
-            return table_list
+        return table
 
     def __create_table(self, tables):
         ''' Creates new table.
@@ -317,13 +293,17 @@ class mysql_client(object):
             Input: str / list of str
         '''
         Base = declarative_base()
-        new_tables = []
 
         if isinstance(tables, str):
-            tables = [tables]
+            tables = (tables)
 
         for table in tables:
-            basename = table.split('_')[0]
+            # remove prefix and affix (to apply DB schema)
+            prefixes = [item+"_" for item in SQL_TABLES_PREFIX.values()
+                        if item+"_" in table]
+            prefix = prefixes[0] if prefixes else ''
+            basename = table.replace(prefix, '').rsplit('_', 1)[0]
+
             kwargs = deepcopy(SQL_DB_SCHEMAS[basename])
             kwargs['__tablename__'] = table
             # injects args in skeleton Class
@@ -331,13 +311,19 @@ class mysql_client(object):
 
         Base.metadata.create_all(self.db)
 
-    # implement slice="day",..
-    # def __format(self, jsonObj, api, slice_daily=False):
     def __format(self, jsonObj, api, slice=False):
 
         data = []
         if api == "powerDetails" or api == "energyDetails":
             jdata = jsonObj[api]["meters"]
+            # sort based on DBSchema
+            table = SE_API_TABLE[api]
+            _schema = [item for item in
+                       SQL_DB_SCHEMAS[table].keys()
+                       if item not in ('id', 'Time')]
+            # todo sort order key for different apis
+            jdata = sorted(jdata,
+                           key=lambda x: _schema.index(x['type']))
             data = [[datetime.strptime(item["date"], "%Y-%m-%d %H:%M:%S")]
                     for item in jdata[0]["values"]]
             for idx, time in enumerate(data):
@@ -345,17 +331,17 @@ class mysql_client(object):
                     data[idx].append(
                         meter['values'][idx].get('value', float(0)))
 
+            # delete last entry since it isincomplete data
             if len(data) > 1:
                 del data[-1]
             data = [data]
 
         elif api == "dataPeriod":
-            data = [data["dataPeriod"]["startDate"],
-                    data["dataPeriod"]["endDate"]]
+            data = [jsonObj["dataPeriod"]["startDate"],
+                    jsonObj["dataPeriod"]["endDate"]]
 
         if slice:
             data = self._slice_data(data, slice)
-        print(data)
         return data
 
     def _slice_data(self, data, slice):
@@ -380,7 +366,6 @@ class mysql_client(object):
                 data.append(x[idx:])
                 self._slice_data(data, slice)
         else:
-            print(data)
             return data
 
     def __check_date_shift(self, time):

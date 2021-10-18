@@ -1,7 +1,7 @@
 from mycroft import MycroftSkill, intent_file_handler
 from adapt.intent import IntentBuilder
 from mycroft import intent_handler
-from mycroft.util.time import now_local
+from mycroft.util.time import now_local, default_timezone
 
 from lingua_franca.parse import extract_datetime
 
@@ -24,8 +24,6 @@ class SolaredgePvMonitoring(MycroftSkill):
         if not self.siteID or not self.apiKey:
             self.speak_dialog("credentials_missing")
         self.settings_change_callback = self.backend_change
-        self.BASEURL = \
-            "https://monitoringapi.solaredge.com/site/"+str(self.siteID)+"/"
 
         # database stuff
         self.use_storage = self.settings.get("use_storage", False)
@@ -34,6 +32,7 @@ class SolaredgePvMonitoring(MycroftSkill):
         self.db_name = self.settings.get("db_name", None)
         # automated check interval
         self.check_intervall = 900  # seconds
+
         if self.use_storage:
             if not self.db_lang or not self.db_name:
                 self.speak_dialog('database_credentials_missing')
@@ -63,8 +62,6 @@ class SolaredgePvMonitoring(MycroftSkill):
         use_ssl = self.settings.get('use_ssl', False)
         db_name = self.settings.get('db_name', None)
         db_lang = self.settings.get("db_lang", None)
-        self.BASEURL = \
-            "https://monitoringapi.solaredge.com/site/"+str(self.siteID)+"/"
         # voice feedbacks
         if self.siteID != siteID or self.apiKey != apiKey:
             self.speak_dialog("credentials_changed")
@@ -102,22 +99,31 @@ class SolaredgePvMonitoring(MycroftSkill):
         self.mysql_client = mysql_client(language=self.db_lang)
         # this case will always return False the first time since the key doesn't exist
         # this way i can ensure a one time catch of the historical data
-        # hist_data = self.settings.get('historical_data', False)
+        hist_data = self.settings.get('historical_data', False)
+        self.mysql_client.set_timezone(default_timezone())
 
-        test_connection = self.mysql_client.create_connection(self.db_name,
-                                                              self.use_ssl)
-        if test_connection != 0:
+        connection = self.mysql_client.create_connection(self.db_name,
+                                                         self.use_ssl)
+        if connection != 0:
             self.speak_dialog('database_connection_failed',
-                              data={"errormsg": test_connection})
+                              data={"errormsg": connection})
         else:
             self.speak_dialog('database_connected')
 
-            # if not hist_data:
-            #    if self.mysql_client.catch_historical_data():
-            #        self.settings['historical_data'] = True
+            if not hist_data:
+                self.speak_dialog('historical_data_load')
+                try:
+                    loaded = self.mysql_client.retrieve_historical_data()
+                    if loaded:
+                        self.speak_dialog('historical_data_success')
+                        self.settings['historical_data'] = True
+                except Exception as e:
+                    error = str(e)
+                    self.speak_dialog('historical_data_failed',
+                                      data={"error": error})
 
     def handle_solardata_storage(self):
-        file_db = ["csv", "json", "xlsx"]
+        # file_db = ["csv", "json", "xlsx"]
         apis_check = ["energyDetails"]  # "powerDetails",
 
         params = {"slice": "day",
